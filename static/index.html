@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Messaging App</title>
+    <title>Messager</title>
     <style>
       body { margin: 0; font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
       .wrap { display: none; height: 100vh; }
       .login { display: grid; place-items: center; height: 100vh; }
-      .card { width: min(440px, 92vw); background: #1e293b; padding: 20px; border-radius: 12px; }
+      .card { width: min(460px, 92vw); background: #1e293b; padding: 20px; border-radius: 12px; }
       .app { display: flex; width: 100%; height: 100%; }
-      .sidebar { width: 320px; border-right: 1px solid #334155; padding: 14px; overflow-y: auto; background: #111827; }
+      .sidebar { width: 340px; border-right: 1px solid #334155; padding: 14px; overflow-y: auto; background: #111827; }
       .chat { flex: 1; display: flex; flex-direction: column; }
       .chat-head { border-bottom: 1px solid #334155; padding: 14px; font-weight: bold; }
       .messages { flex: 1; overflow-y: auto; padding: 14px; }
@@ -18,28 +18,28 @@
       input, button { border-radius: 8px; border: 1px solid #334155; background: #0b1220; color: #e2e8f0; padding: 10px; }
       input { width: 100%; }
       button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
-      .item { padding: 8px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      .item { padding: 8px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
       .actions { display: flex; gap: 6px; }
       .actions button { padding: 6px 8px; }
       .muted { color: #94a3b8; font-size: 12px; }
       .msg { margin-bottom: 10px; background: #1e293b; border: 1px solid #334155; padding: 8px; border-radius: 8px; }
       h3 { margin: 14px 0 8px; }
       .me { color: #86efac; }
-      #error { color: #fca5a5; min-height: 20px; }
       .dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; margin-right: 6px; }
       .online { background: #22c55e; }
       .offline { background: #64748b; }
+      #error { color: #fca5a5; min-height: 20px; }
     </style>
   </head>
   <body>
     <div class="login" id="login">
       <div class="card">
-        <h2>Messaging App</h2>
-        <p class="muted">Create an account or log in, then chat 1:1 or in groups.</p>
-        <input id="usernameInput" placeholder="Username" />
-        <div style="height: 8px"></div>
+        <h2>Messager</h2>
+        <p class="muted">Private chat by email. Add contacts by email to message them.</p>
+        <input id="emailInput" placeholder="Email address" />
+        <div style="height:8px"></div>
         <input id="passwordInput" type="password" placeholder="Password (min 6 chars)" />
-        <div style="height: 10px"></div>
+        <div style="height:10px"></div>
         <div style="display:flex; gap:8px;">
           <button id="registerBtn">Register</button>
           <button id="loginBtn">Login</button>
@@ -52,8 +52,13 @@
       <div class="app">
         <aside class="sidebar">
           <div><b id="meLabel"></b></div>
-          <h3>Direct messages</h3>
-          <div id="usersList"></div>
+          <h3>Contacts</h3>
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <input id="contactInput" placeholder="friend@email.com" />
+            <button id="addContactBtn">Add</button>
+          </div>
+          <div id="contactsList"></div>
+
           <h3>Groups</h3>
           <div style="display:flex; gap:6px; margin-bottom:8px;">
             <input id="groupInput" placeholder="New group name" />
@@ -63,7 +68,7 @@
         </aside>
 
         <section class="chat">
-          <div class="chat-head" id="chatTitle">Select a chat</div>
+          <div class="chat-head" id="chatTitle">Select a contact or group</div>
           <div class="messages" id="messages"></div>
           <div class="row">
             <input id="messageInput" placeholder="Type a message..." />
@@ -76,13 +81,13 @@
     <script>
       let ws;
       let me = "";
-      let users = [];
+      let contacts = [];
       let groups = [];
       let current = null;
       const byConversation = new Map();
 
       const el = (id) => document.getElementById(id);
-      const usersList = el("usersList");
+      const contactsList = el("contactsList");
       const groupsList = el("groupsList");
       const messages = el("messages");
       const chatTitle = el("chatTitle");
@@ -92,13 +97,12 @@
       function groupId(name) { return `group:${name}`; }
       function esc(text) { return String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
 
-      function connect(authType, username, password) {
+      function connect(authType, email, password) {
         const proto = location.protocol === "https:" ? "wss" : "ws";
         ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-        ws.onopen = () => ws.send(JSON.stringify({ type: authType, username, password }));
+        ws.onopen = () => ws.send(JSON.stringify({ type: authType, email, password }));
         ws.onmessage = (event) => handleServer(JSON.parse(event.data));
-        ws.onclose = () => { error.textContent = "Disconnected from server."; };
+        ws.onclose = () => { error.textContent = "Disconnected."; };
       }
 
       function handleServer(data) {
@@ -109,17 +113,17 @@
           return;
         }
         if (data.type === "init") {
-          me = data.username;
-          users = data.users || [];
+          me = data.email;
+          contacts = data.contacts || [];
           groups = data.groups || [];
           el("meLabel").textContent = `You: ${me}`;
           el("login").style.display = "none";
           el("wrap").style.display = "block";
-          renderUsers();
+          renderContacts();
           renderGroups();
           return;
         }
-        if (data.type === "users") { users = data.users || []; renderUsers(); return; }
+        if (data.type === "contacts") { contacts = data.contacts || []; renderContacts(); return; }
         if (data.type === "groups") { groups = data.groups || []; renderGroups(); return; }
         if (data.type === "message") {
           const msg = data.message;
@@ -135,13 +139,12 @@
         }
       }
 
-      function renderUsers() {
-        const others = users.filter((u) => u.username !== me);
-        usersList.innerHTML = others.map((u) => `
-            <div class="item">
-              <span><span class="dot ${u.online ? "online" : "offline"}"></span>${esc(u.username)}</span>
-              <div class="actions"><button onclick="openDm('${encodeURIComponent(u.username)}')">Chat</button></div>
-            </div>`).join("") || `<div class="muted">No other users yet.</div>`;
+      function renderContacts() {
+        contactsList.innerHTML = contacts.map((c) => `
+          <div class="item">
+            <span><span class="dot ${c.online ? "online" : "offline"}"></span>${esc(c.email)}</span>
+            <div class="actions"><button onclick="openDm('${encodeURIComponent(c.email)}')">Chat</button></div>
+          </div>`).join("") || `<div class="muted">No contacts yet.</div>`;
       }
 
       function renderGroups() {
@@ -169,38 +172,42 @@
         messages.scrollTop = messages.scrollHeight;
       }
 
-      window.openDm = (encodedUser) => {
-        const user = decodeURIComponent(encodedUser);
-        const id = dmId(me, user);
-        current = { kind: "dm", user, id };
-        chatTitle.textContent = `Direct chat with ${user}`;
-        ws.send(JSON.stringify({ type: "fetch_history", conversationId: id }));
+      window.openDm = (encodedEmail) => {
+        const email = decodeURIComponent(encodedEmail);
+        current = { kind: "dm", email, id: dmId(me, email) };
+        chatTitle.textContent = `Direct chat with ${email}`;
+        ws.send(JSON.stringify({ type: "fetch_history", conversationId: current.id }));
       };
 
       window.joinGroup = (encodedName) => {
-        const name = decodeURIComponent(encodedName);
-        ws.send(JSON.stringify({ type: "join_group", name }));
+        ws.send(JSON.stringify({ type: "join_group", name: decodeURIComponent(encodedName) }));
       };
 
       window.openGroup = (encodedName) => {
         const name = decodeURIComponent(encodedName);
-        const id = groupId(name);
-        current = { kind: "group", name, id };
+        current = { kind: "group", name, id: groupId(name) };
         chatTitle.textContent = `Group: ${name}`;
-        ws.send(JSON.stringify({ type: "fetch_history", conversationId: id }));
+        ws.send(JSON.stringify({ type: "fetch_history", conversationId: current.id }));
       };
 
       function auth(action) {
-        const username = el("usernameInput").value.trim();
+        const email = el("emailInput").value.trim().toLowerCase();
         const password = el("passwordInput").value.trim();
-        if (!username || !password) { error.textContent = "Enter username and password."; return; }
+        if (!email || !password) { error.textContent = "Enter email and password."; return; }
         if (password.length < 6) { error.textContent = "Password must be at least 6 characters."; return; }
         error.textContent = "";
-        connect(action, username, password);
+        connect(action, email, password);
       }
 
       el("registerBtn").onclick = () => auth("register");
       el("loginBtn").onclick = () => auth("login");
+
+      el("addContactBtn").onclick = () => {
+        const email = el("contactInput").value.trim().toLowerCase();
+        if (!email) return;
+        ws.send(JSON.stringify({ type: "add_contact", email }));
+        el("contactInput").value = "";
+      };
 
       el("createGroupBtn").onclick = () => {
         const name = el("groupInput").value.trim();
@@ -212,7 +219,7 @@
       el("sendBtn").onclick = () => {
         const text = el("messageInput").value.trim();
         if (!text || !current) return;
-        if (current.kind === "dm") ws.send(JSON.stringify({ type: "send_dm", to: current.user, text }));
+        if (current.kind === "dm") ws.send(JSON.stringify({ type: "send_dm", to: current.email, text }));
         else ws.send(JSON.stringify({ type: "send_group", group: current.name, text }));
         el("messageInput").value = "";
       };

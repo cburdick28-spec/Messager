@@ -3,6 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+    <link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/static/logo.svg" />
     <title>Messager</title>
     <style>
       body { margin: 0; font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
@@ -44,6 +48,8 @@
           <button id="registerBtn">Register</button>
           <button id="loginBtn">Login</button>
         </div>
+        <div style="height:8px"></div>
+        <button id="installBtn" style="display:none; width:100%;">Install App</button>
         <p id="error"></p>
       </div>
     </div>
@@ -84,6 +90,7 @@
       let contacts = [];
       let groups = [];
       let current = null;
+      let installPrompt = null;
       const byConversation = new Map();
 
       const el = (id) => document.getElementById(id);
@@ -226,6 +233,24 @@
 
       el("messageInput").addEventListener("keydown", (e) => { if (e.key === "Enter") el("sendBtn").click(); });
       el("passwordInput").addEventListener("keydown", (e) => { if (e.key === "Enter") auth("login"); });
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/static/service-worker.js");
+      }
+
+      window.addEventListener("beforeinstallprompt", (event) => {
+        event.preventDefault();
+        installPrompt = event;
+        el("installBtn").style.display = "block";
+      });
+
+      el("installBtn").onclick = async () => {
+        if (!installPrompt) return;
+        installPrompt.prompt();
+        await installPrompt.userChoice;
+        installPrompt = null;
+        el("installBtn").style.display = "none";
+      };
     </script>
   </body>
 </html>

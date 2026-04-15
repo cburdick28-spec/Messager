@@ -5,6 +5,7 @@ Real-time messaging app with:
 - direct messages
 - group chats
 - persisted chat history (SQLite)
+- installable app (PWA) with logo
 
 ## Run locally
 
@@ -14,6 +15,8 @@ python server.py
 ```
 
 Open `http://localhost:8080`.
+
+On supported browsers, click **Install App** on the login screen to install it like an app.
 
 ## Deploy free (Koyeb)
 

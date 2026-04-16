@@ -6,8 +6,7 @@
     <meta name="theme-color" content="#0f172a" />
     <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/static/logo.svg" />
-    <title>Messager</title>
+    <title>Messenger Chat</title>
     <style>
       body { margin: 0; font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
       .wrap { display: none; height: 100vh; }
@@ -29,17 +28,15 @@
       .msg { margin-bottom: 10px; background: #1e293b; border: 1px solid #334155; padding: 8px; border-radius: 8px; }
       h3 { margin: 14px 0 8px; }
       .me { color: #86efac; }
-      .dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; margin-right: 6px; }
-      .online { background: #22c55e; }
-      .offline { background: #64748b; }
       #error { color: #fca5a5; min-height: 20px; }
+      .hidden { display: none; }
     </style>
   </head>
   <body>
     <div class="login" id="login">
       <div class="card">
-        <h2>Messager</h2>
-        <p class="muted">Private chat by email. Add contacts by email to message them.</p>
+        <h2>Messenger Chat</h2>
+        <p class="muted">Vercel + Supabase mode.</p>
         <input id="emailInput" placeholder="Email address" />
         <div style="height:8px"></div>
         <input id="passwordInput" type="password" placeholder="Password (min 6 chars)" />
@@ -49,7 +46,7 @@
           <button id="loginBtn">Login</button>
         </div>
         <div style="height:8px"></div>
-        <button id="installBtn" style="display:none; width:100%;">Install App</button>
+        <button id="installBtn" class="hidden" style="width:100%;">Install App</button>
         <p id="error"></p>
       </div>
     </div>
@@ -57,7 +54,11 @@
     <div class="wrap" id="wrap">
       <div class="app">
         <aside class="sidebar">
-          <div><b id="meLabel"></b></div>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <b id="meLabel"></b>
+            <button id="logoutBtn">Logout</button>
+          </div>
+
           <h3>Contacts</h3>
           <div style="display:flex; gap:6px; margin-bottom:8px;">
             <input id="contactInput" placeholder="friend@email.com" />
@@ -84,13 +85,16 @@
       </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/static/config.js"></script>
     <script>
-      let ws;
-      let me = "";
+      let supabase = null;
+      let me = null;
       let contacts = [];
       let groups = [];
       let current = null;
       let installPrompt = null;
+      let refreshTimer = null;
       const byConversation = new Map();
 
       const el = (id) => document.getElementById(id);
@@ -100,148 +104,300 @@
       const chatTitle = el("chatTitle");
       const error = el("error");
 
+      function dmPair(idA, idB) { return [idA, idB].sort(); }
       function dmId(a, b) { return `dm:${[a, b].sort().join(":")}`; }
-      function groupId(name) { return `group:${name}`; }
+      function groupId(id) { return `group:${id}`; }
       function esc(text) { return String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
 
-      function connect(authType, email, password) {
-        const proto = location.protocol === "https:" ? "wss" : "ws";
-        ws = new WebSocket(`${proto}://${location.host}/ws`);
-        ws.onopen = () => ws.send(JSON.stringify({ type: authType, email, password }));
-        ws.onmessage = (event) => handleServer(JSON.parse(event.data));
-        ws.onclose = () => { error.textContent = "Disconnected."; };
+      function setError(message) {
+        error.textContent = message || "";
       }
 
-      function handleServer(data) {
-        if (data.type === "error") { error.textContent = data.message; return; }
-        if (data.type === "info") {
-          error.textContent = data.message;
-          setTimeout(() => { if (error.textContent === data.message) error.textContent = ""; }, 1500);
+      function setLoggedIn(loggedIn) {
+        el("login").style.display = loggedIn ? "none" : "grid";
+        el("wrap").style.display = loggedIn ? "block" : "none";
+      }
+
+      async function ensureProfile(user) {
+        const email = (user.email || "").toLowerCase();
+        await supabase.from("profiles").upsert({ id: user.id, email }, { onConflict: "id" });
+      }
+
+      async function loadContacts() {
+        const { data: rows, error: contactsError } = await supabase
+          .from("contacts")
+          .select("contact_id")
+          .eq("owner_id", me.id);
+        if (contactsError) throw contactsError;
+
+        if (!rows.length) {
+          contacts = [];
+          renderContacts();
           return;
         }
-        if (data.type === "init") {
-          me = data.email;
-          contacts = data.contacts || [];
-          groups = data.groups || [];
-          el("meLabel").textContent = `You: ${me}`;
-          el("login").style.display = "none";
-          el("wrap").style.display = "block";
-          renderContacts();
+
+        const contactIds = rows.map((r) => r.contact_id);
+        const { data: profiles, error: profilesError } = await supabase
+          .from("profiles")
+          .select("id,email")
+          .in("id", contactIds);
+        if (profilesError) throw profilesError;
+
+        const byId = new Map((profiles || []).map((p) => [p.id, p]));
+        contacts = rows
+          .map((row) => byId.get(row.contact_id))
+          .filter(Boolean)
+          .map((p) => ({ id: p.id, email: p.email }))
+          .sort((a, b) => a.email.localeCompare(b.email));
+        renderContacts();
+      }
+
+      async function loadGroups() {
+        const { data: memberships, error: membersError } = await supabase
+          .from("group_members")
+          .select("group_id")
+          .eq("user_id", me.id);
+        if (membersError) throw membersError;
+
+        if (!memberships.length) {
+          groups = [];
           renderGroups();
           return;
         }
-        if (data.type === "contacts") { contacts = data.contacts || []; renderContacts(); return; }
-        if (data.type === "groups") { groups = data.groups || []; renderGroups(); return; }
-        if (data.type === "message") {
-          const msg = data.message;
-          const list = byConversation.get(msg.conversationId) || [];
-          list.push(msg);
-          byConversation.set(msg.conversationId, list);
-          if (current && current.id === msg.conversationId) renderMessages(current.id);
-          return;
+
+        const groupIds = memberships.map((m) => m.group_id);
+        const { data: groupRows, error: groupsError } = await supabase
+          .from("chat_groups")
+          .select("id,name")
+          .in("id", groupIds)
+          .order("name", { ascending: true });
+        if (groupsError) throw groupsError;
+
+        groups = groupRows || [];
+        renderGroups();
+      }
+
+      async function loadDmHistory(otherUserId, otherEmail) {
+        const [a, b] = dmPair(me.id, otherUserId);
+        const { data, error: historyError } = await supabase
+          .from("messages")
+          .select("id,kind,dm_a,dm_b,group_id,sender_id,text,created_at")
+          .eq("kind", "dm")
+          .eq("dm_a", a)
+          .eq("dm_b", b)
+          .order("created_at", { ascending: true })
+          .limit(500);
+        if (historyError) throw historyError;
+
+        byConversation.set(
+          dmId(me.email, otherEmail),
+          (data || []).map((m) => ({
+            conversationId: dmId(me.email, otherEmail),
+            from: m.sender_id === me.id ? me.email : otherEmail,
+            text: m.text,
+            timestamp: m.created_at
+          }))
+        );
+      }
+
+      async function loadGroupHistory(group) {
+        const { data, error: historyError } = await supabase
+          .from("messages")
+          .select("id,kind,group_id,sender_id,text,created_at")
+          .eq("kind", "group")
+          .eq("group_id", group.id)
+          .order("created_at", { ascending: true })
+          .limit(500);
+        if (historyError) throw historyError;
+
+        const senderIds = [...new Set((data || []).map((m) => m.sender_id))];
+        const senderEmails = {};
+        if (senderIds.length) {
+          const { data: profiles } = await supabase.from("profiles").select("id,email").in("id", senderIds);
+          (profiles || []).forEach((p) => { senderEmails[p.id] = p.email; });
         }
-        if (data.type === "history") {
-          byConversation.set(data.conversationId, data.messages || []);
-          if (current && current.id === data.conversationId) renderMessages(current.id);
-        }
+
+        byConversation.set(
+          groupId(group.id),
+          (data || []).map((m) => ({
+            conversationId: groupId(group.id),
+            from: senderEmails[m.sender_id] || "Unknown",
+            text: m.text,
+            timestamp: m.created_at
+          }))
+        );
       }
 
       function renderContacts() {
         contactsList.innerHTML = contacts.map((c) => `
           <div class="item">
-            <span><span class="dot ${c.online ? "online" : "offline"}"></span>${esc(c.email)}</span>
-            <div class="actions"><button onclick="openDm('${encodeURIComponent(c.email)}')">Chat</button></div>
+            <span>${esc(c.email)}</span>
+            <div class="actions"><button onclick="openDm('${encodeURIComponent(c.id)}','${encodeURIComponent(c.email)}')">Chat</button></div>
           </div>`).join("") || `<div class="muted">No contacts yet.</div>`;
       }
 
       function renderGroups() {
-        groupsList.innerHTML = groups.map((g) => {
-          const joined = g.members.includes(me);
-          return `
-            <div class="item">
-              <div>
-                <div>${esc(g.name)}</div>
-                <div class="muted">${g.members.length} member(s)</div>
-              </div>
-              <div class="actions">
-                ${joined ? `<button onclick="openGroup('${encodeURIComponent(g.name)}')">Open</button>` : `<button onclick="joinGroup('${encodeURIComponent(g.name)}')">Join</button>`}
-              </div>
-            </div>`;
-        }).join("") || `<div class="muted">No groups yet.</div>`;
+        groupsList.innerHTML = groups.map((g) => `
+          <div class="item">
+            <div>${esc(g.name)}</div>
+            <div class="actions"><button onclick="openGroup('${encodeURIComponent(g.id)}','${encodeURIComponent(g.name)}')">Open</button></div>
+          </div>`).join("") || `<div class="muted">No groups yet.</div>`;
       }
 
       function renderMessages(conversationId) {
         const list = byConversation.get(conversationId) || [];
         messages.innerHTML = list.map((m) => {
-          const who = m.from === me ? `<span class="me">${esc(m.from)}</span>` : esc(m.from);
+          const who = m.from === me.email ? `<span class="me">${esc(m.from)}</span>` : esc(m.from);
           return `<div class="msg"><b>${who}</b>: ${esc(m.text)}<div class="muted">${new Date(m.timestamp).toLocaleString()}</div></div>`;
         }).join("");
         messages.scrollTop = messages.scrollHeight;
       }
 
-      window.openDm = (encodedEmail) => {
-        const email = decodeURIComponent(encodedEmail);
-        current = { kind: "dm", email, id: dmId(me, email) };
-        chatTitle.textContent = `Direct chat with ${email}`;
-        ws.send(JSON.stringify({ type: "fetch_history", conversationId: current.id }));
-      };
+      async function refreshCurrentHistory() {
+        if (!current) return;
+        if (current.kind === "dm") {
+          await loadDmHistory(current.userId, current.email);
+        } else {
+          await loadGroupHistory(current.group);
+        }
+        renderMessages(current.id);
+      }
 
-      window.joinGroup = (encodedName) => {
-        ws.send(JSON.stringify({ type: "join_group", name: decodeURIComponent(encodedName) }));
-      };
+      async function startSession(user) {
+        me = { id: user.id, email: user.email.toLowerCase() };
+        await ensureProfile(user);
+        el("meLabel").textContent = `You: ${me.email}`;
+        await loadContacts();
+        await loadGroups();
+        setLoggedIn(true);
+        setError("");
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(async () => {
+          try {
+            await loadContacts();
+            await loadGroups();
+            await refreshCurrentHistory();
+          } catch {
+            // Keep UI responsive if background refresh fails intermittently.
+          }
+        }, 3000);
+      }
 
-      window.openGroup = (encodedName) => {
-        const name = decodeURIComponent(encodedName);
-        current = { kind: "group", name, id: groupId(name) };
-        chatTitle.textContent = `Group: ${name}`;
-        ws.send(JSON.stringify({ type: "fetch_history", conversationId: current.id }));
-      };
-
-      function auth(action) {
+      async function auth(action) {
         const email = el("emailInput").value.trim().toLowerCase();
         const password = el("passwordInput").value.trim();
-        if (!email || !password) { error.textContent = "Enter email and password."; return; }
-        if (password.length < 6) { error.textContent = "Password must be at least 6 characters."; return; }
-        error.textContent = "";
-        connect(action, email, password);
+        if (!email || !password) return setError("Enter email and password.");
+        if (password.length < 6) return setError("Password must be at least 6 characters.");
+
+        let result;
+        if (action === "register") {
+          result = await supabase.auth.signUp({ email, password });
+        } else {
+          result = await supabase.auth.signInWithPassword({ email, password });
+        }
+        if (result.error) return setError(result.error.message);
+        if (!result.data.user) return setError("Check your email for a confirmation link, then log in.");
+        await startSession(result.data.user);
       }
+
+      window.openDm = async (encodedUserId, encodedEmail) => {
+        const userId = decodeURIComponent(encodedUserId);
+        const email = decodeURIComponent(encodedEmail);
+        current = { kind: "dm", userId, email, id: dmId(me.email, email) };
+        chatTitle.textContent = `Direct chat with ${email}`;
+        await loadDmHistory(userId, email);
+        renderMessages(current.id);
+      };
+
+      window.openGroup = async (encodedGroupId, encodedName) => {
+        const id = decodeURIComponent(encodedGroupId);
+        const name = decodeURIComponent(encodedName);
+        const group = { id, name };
+        current = { kind: "group", group, id: groupId(id) };
+        chatTitle.textContent = `Group: ${name}`;
+        await loadGroupHistory(group);
+        renderMessages(current.id);
+      };
 
       el("registerBtn").onclick = () => auth("register");
       el("loginBtn").onclick = () => auth("login");
 
-      el("addContactBtn").onclick = () => {
-        const email = el("contactInput").value.trim().toLowerCase();
-        if (!email) return;
-        ws.send(JSON.stringify({ type: "add_contact", email }));
+      el("addContactBtn").onclick = async () => {
+        const contactEmail = el("contactInput").value.trim().toLowerCase();
+        if (!contactEmail) return;
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("id,email")
+          .eq("email", contactEmail)
+          .single();
+        if (profileError || !profile) return setError("No account found for that email.");
+        if (profile.id === me.id) return setError("You cannot add yourself.");
+        const { error: insertError } = await supabase.from("contacts").upsert(
+          { owner_id: me.id, contact_id: profile.id },
+          { onConflict: "owner_id,contact_id" }
+        );
+        if (insertError) return setError(insertError.message);
         el("contactInput").value = "";
+        await loadContacts();
       };
 
-      el("createGroupBtn").onclick = () => {
+      el("createGroupBtn").onclick = async () => {
         const name = el("groupInput").value.trim();
         if (!name) return;
-        ws.send(JSON.stringify({ type: "create_group", name }));
+        const { data: created, error: groupError } = await supabase
+          .from("chat_groups")
+          .insert({ name, created_by: me.id })
+          .select("id,name")
+          .single();
+        if (groupError) return setError(groupError.message);
+
+        const { error: memberError } = await supabase
+          .from("group_members")
+          .upsert({ group_id: created.id, user_id: me.id }, { onConflict: "group_id,user_id" });
+        if (memberError) return setError(memberError.message);
         el("groupInput").value = "";
+        await loadGroups();
       };
 
-      el("sendBtn").onclick = () => {
+      el("sendBtn").onclick = async () => {
         const text = el("messageInput").value.trim();
         if (!text || !current) return;
-        if (current.kind === "dm") ws.send(JSON.stringify({ type: "send_dm", to: current.email, text }));
-        else ws.send(JSON.stringify({ type: "send_group", group: current.name, text }));
+        let payload;
+        if (current.kind === "dm") {
+          const [a, b] = dmPair(me.id, current.userId);
+          payload = { kind: "dm", dm_a: a, dm_b: b, sender_id: me.id, text };
+        } else {
+          payload = { kind: "group", group_id: current.group.id, sender_id: me.id, text };
+        }
+        const { error: insertError } = await supabase.from("messages").insert(payload);
+        if (insertError) return setError(insertError.message);
         el("messageInput").value = "";
+        await refreshCurrentHistory();
+      };
+
+      el("logoutBtn").onclick = async () => {
+        await supabase.auth.signOut();
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = null;
+        me = null;
+        current = null;
+        contacts = [];
+        groups = [];
+        byConversation.clear();
+        messages.innerHTML = "";
+        chatTitle.textContent = "Select a contact or group";
+        setLoggedIn(false);
       };
 
       el("messageInput").addEventListener("keydown", (e) => { if (e.key === "Enter") el("sendBtn").click(); });
       el("passwordInput").addEventListener("keydown", (e) => { if (e.key === "Enter") auth("login"); });
 
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/static/service-worker.js");
-      }
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("/static/service-worker.js");
 
       window.addEventListener("beforeinstallprompt", (event) => {
         event.preventDefault();
         installPrompt = event;
-        el("installBtn").style.display = "block";
+        el("installBtn").classList.remove("hidden");
       });
 
       el("installBtn").onclick = async () => {
@@ -249,8 +405,24 @@
         installPrompt.prompt();
         await installPrompt.userChoice;
         installPrompt = null;
-        el("installBtn").style.display = "none";
+        el("installBtn").classList.add("hidden");
       };
+
+      async function bootstrap() {
+        if (!window.MESSENGER_CONFIG || !window.MESSENGER_CONFIG.supabaseUrl || !window.MESSENGER_CONFIG.supabaseAnonKey) {
+          setError("Missing Supabase config. Edit /static/config.js with your project URL and anon key.");
+          return;
+        }
+        supabase = window.supabase.createClient(
+          window.MESSENGER_CONFIG.supabaseUrl,
+          window.MESSENGER_CONFIG.supabaseAnonKey
+        );
+
+        const { data } = await supabase.auth.getUser();
+        if (data?.user) await startSession(data.user);
+      }
+
+      bootstrap();
     </script>
   </body>
 </html>

@@ -1,0 +1,16 @@
+[Unit]
+Description=Messager chat app
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/messager
+Environment=PORT=8080
+ExecStart=/opt/messager/.venv/bin/python /opt/messager/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

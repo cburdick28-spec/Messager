@@ -434,6 +434,9 @@ def create_app() -> web.Application:
     return app
 
 
+app = create_app()
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    web.run_app(create_app(), host="0.0.0.0", port=port)
+    web.run_app(app, host="0.0.0.0", port=port)

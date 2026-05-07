@@ -45,6 +45,28 @@ create table if not exists public.messages (
   )
 );
 
+alter table public.messages add column if not exists status text not null default 'sent';
+alter table public.messages add column if not exists read_at timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'messages_status_check'
+      and conrelid = 'public.messages'::regclass
+  ) then
+    alter table public.messages
+      add constraint messages_status_check check (status in ('sent', 'read'));
+  end if;
+end
+$$;
+
+update public.messages
+set status = case when read_at is null then 'sent' else 'read' end
+where status not in ('sent', 'read')
+   or (read_at is not null and status <> 'read');
+
 alter table public.profiles enable row level security;
 alter table public.contacts enable row level security;
 alter table public.chat_groups enable row level security;
@@ -120,5 +142,33 @@ create policy messages_insert_group on public.messages
     and exists (
       select 1 from public.group_members gm
       where gm.group_id = messages.group_id and gm.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists messages_update_receipts on public.messages;
+create policy messages_update_receipts on public.messages
+  for update to authenticated
+  using (
+    sender_id <> auth.uid()
+    and (
+      (kind = 'dm' and auth.uid() in (dm_a, dm_b))
+      or
+      (kind = 'group' and exists (
+        select 1 from public.group_members gm
+        where gm.group_id = messages.group_id and gm.user_id = auth.uid()
+      ))
+    )
+  )
+  with check (
+    sender_id <> auth.uid()
+    and status = 'read'
+    and read_at is not null
+    and (
+      (kind = 'dm' and auth.uid() in (dm_a, dm_b))
+      or
+      (kind = 'group' and exists (
+        select 1 from public.group_members gm
+        where gm.group_id = messages.group_id and gm.user_id = auth.uid()
+      ))
     )
   );

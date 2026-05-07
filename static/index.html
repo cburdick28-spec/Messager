@@ -95,6 +95,7 @@
       let current = null;
       let installPrompt = null;
       let refreshTimer = null;
+      let hasReadReceiptColumns = true;
       const byConversation = new Map();
 
       const el = (id) => document.getElementById(id);
@@ -111,6 +112,11 @@
 
       function setError(message) {
         error.textContent = message || "";
+      }
+
+      function isReadReceiptMissingError(err) {
+        const text = String((err && err.message) || "").toLowerCase();
+        return text.includes("column") && (text.includes("read_at") || text.includes("status"));
       }
 
       function setLoggedIn(loggedIn) {
@@ -253,6 +259,30 @@
         messages.scrollTop = messages.scrollHeight;
       }
 
+      async function markCurrentConversationRead() {
+        if (!current || !hasReadReceiptColumns) return;
+        const readAt = new Date().toISOString();
+        let query = supabase
+          .from("messages")
+          .update({ status: "read", read_at: readAt })
+          .neq("sender_id", me.id)
+          .is("read_at", null);
+
+        if (current.kind === "dm") {
+          const [a, b] = dmPair(me.id, current.userId);
+          query = query.eq("kind", "dm").eq("dm_a", a).eq("dm_b", b);
+        } else {
+          query = query.eq("kind", "group").eq("group_id", current.group.id);
+        }
+
+        const { error: readError } = await query;
+        if (readError && isReadReceiptMissingError(readError)) {
+          hasReadReceiptColumns = false;
+          return;
+        }
+        if (readError) throw readError;
+      }
+
       async function refreshCurrentHistory() {
         if (!current) return;
         if (current.kind === "dm") {
@@ -261,6 +291,7 @@
           await loadGroupHistory(current.group);
         }
         renderMessages(current.id);
+        await markCurrentConversationRead();
       }
 
       async function startSession(user) {
@@ -307,6 +338,7 @@
         chatTitle.textContent = `Direct chat with ${email}`;
         await loadDmHistory(userId, email);
         renderMessages(current.id);
+        await markCurrentConversationRead();
       };
 
       window.openGroup = async (encodedGroupId, encodedName) => {
@@ -317,6 +349,7 @@
         chatTitle.textContent = `Group: ${name}`;
         await loadGroupHistory(group);
         renderMessages(current.id);
+        await markCurrentConversationRead();
       };
 
       el("registerBtn").onclick = () => auth("register");
